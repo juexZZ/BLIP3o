@@ -101,6 +101,9 @@ class blip3oQwenForCausalLM(Qwen2_5_VLForConditionalGeneration, blip3oMetaForCau
                 i_s_pos,
                 image_sizes
             )
+        
+        # # !DEBUG
+        # print(f"in training forward, latent size {latents.size()}")
 
         outputs = self.model(
             input_ids=input_ids,

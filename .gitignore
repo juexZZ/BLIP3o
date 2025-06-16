@@ -1,0 +1,13 @@
+runs
+__pycache__
+blip3o/__pycache__
+blip3o/.DS_Store
+blip3o/model/__pycache__
+blip3o/model/language_model/__pycache__
+blip3o/model/multimodal_encoder/__pycache__
+blip3o/model/multimodal_encoder/dev_eva_clip/__pycache__
+blip3o/model/multimodal_encoder/dev_eva_clip/eva_clip/__pycache__
+blip3o/model/multimodal_encoder/eva_clip/__pycache__/
+blip3o/train/__pycache__
+retrieval_embeddings
+.DS_Store

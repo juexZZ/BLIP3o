@@ -28,7 +28,7 @@ class blip3oMetaModel:
 
 
         if hasattr(config, "gen_vision_tower"):
-            self.gen_vision_tower = build_gen_vision_tower(config, delay_load=True)
+            self.gen_vision_tower = build_gen_vision_tower(config, delay_load=False)
             # self.gen_projector = build_gen_vision_projector(config)
             self.latent_queries = nn.Parameter(torch.randn(1, config.n_query, config.hidden_size))
             print(f" latent query size {self.latent_queries.shape}")
@@ -38,7 +38,7 @@ class blip3oMetaModel:
                     torch.empty(config.hidden_size, dtype=self.dtype)
                 )
 
-            self.dit, self.noise_scheduler = build_dit(config)
+            self.dit, self.vae, self.noise_scheduler = build_dit(config)
 
 
     # def get_vision_tower(self):
@@ -73,7 +73,7 @@ class blip3oMetaModel:
 
         if getattr(self, 'dit', None) is None:
             print("random initiation the DiT !!!")
-            self.dit, self.noise_scheduler = build_dit(model_args)
+            self.dit, self.vae, self.noise_scheduler = build_dit(model_args)
         else:
             print("DiT load from checkpoint!!!")
             for p in self.dit.parameters():
@@ -125,6 +125,7 @@ class blip3oMetaModel:
 
 
         if getattr(self, 'down_projector', None) is None:
+            print("random initiation the down_projector !!!")
             self.down_projector = build_down_projector(self.config)
         else:
             # In case it is frozen by LoRA
@@ -194,23 +195,25 @@ class blip3oMetaForCausalLM(ABC):
     def encode_image(self, images):
         # breakpoint()
         gen_vision_tower = self.get_gen_vision_tower()
-        device = gen_vision_tower.device
-        images = images.to(device)
+        # device = gen_vision_tower.device
+        # images = images.to(device)
         prompt_image_embeds = gen_vision_tower(images)
         if 'early' in self.get_gen_pooling():
             prompt_image_embeds = self.pool_img(prompt_image_embeds)
-        num_img, _, c = prompt_image_embeds.shape
+        # print("prompt image embeddings size", prompt_image_embeds.size())
+        # num_img, _, c = prompt_image_embeds.shape
         # prompt_image_embeds = prompt_image_embeds.contiguous().view(-1, c)
 
         # ------------- compute similarity -------
-        all_dist = 0
-        count = 0
-        for i in range(2, prompt_image_embeds.shape[1]-1):
-            diff = (prompt_image_embeds[:,i,:].unsqueeze(1) -  prompt_image_embeds[:,:i,:])
-            dist = torch.sqrt(diff.square().sum(-1)).min().item()
-            all_dist+=dist
-            count+=1
-        all_dist /= count
+        # ! not used
+        # all_dist = 0
+        # count = 0
+        # for i in range(2, prompt_image_embeds.shape[1]-1):
+        #     diff = (prompt_image_embeds[:,i,:].unsqueeze(1) -  prompt_image_embeds[:,:i,:])
+        #     dist = torch.sqrt(diff.square().sum(-1)).min().item()
+        #     all_dist+=dist
+        #     count+=1
+        # all_dist /= count
         # self.dist = all_dist
         # print(self.dist)
 
@@ -274,6 +277,7 @@ class blip3oMetaForCausalLM(ABC):
 
 
         prompt_image_embeds = gen_vision_tower(gen_images) # TODO: check dimension
+        # print("in prepare inputs >> prompt_image_embeds (output of gen vision tower) has shape:", prompt_image_embeds.size()) [bsz, 1024, 1792]
       
         if 'early' in self.get_gen_pooling():
             prompt_image_embeds = self.pool_img(prompt_image_embeds)

@@ -4,12 +4,12 @@ import torch.nn as nn
 from PIL import Image
 import torch.nn.functional as F
 import transformers
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoProcessor
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.generation.utils import GenerateOutput
 from blip3o.model.blip3o_arch import blip3oMetaModel, blip3oMetaForCausalLM
 from transformers import Qwen2_5_VLConfig, Qwen2_5_VLModel, Qwen2_5_VLForConditionalGeneration
-from blip3o.constants import UND_IMAGE_TOKEN_IDX
+from blip3o.constants import UND_IMAGE_TOKEN_IDX, DEFAULT_IMAGE_TOKEN
 
 
 from diffusers.utils.torch_utils import randn_tensor
@@ -44,6 +44,51 @@ class blip3oQwenForInferenceLM(Qwen2_5_VLForConditionalGeneration, blip3oMetaFor
 
     def get_model(self):
         return self.model
+
+    
+    def prepare_vl_input_for_generation(
+        self,
+        inputs: List[Image.Image | str | torch.Tensor],
+        processor: AutoProcessor,
+        image_place_holder = "<image>",
+    ):
+        """
+        Add this function to support image+text inputs for generation.
+        Image and text prompt goes through the Qwen2.5VL backbone. But,
+        This implementation is slightly different from the original Qwen implementation:
+        In Qwen, the processor handles the number of image patches to support the native resolution.
+        Here, I adhere to blip3o's pipeline_llava_gen to manually construct the vl prompt with a fixed image size of 448x448
+        The reason for this design choice in blip3o is unclear
+        input:
+         - processor: pass in qwen processor
+        """
+        has_image, has_text = False, False
+        text_prompt, image_prompt, image_grid_thw = "", [], []
+        for x in inputs:
+            if isinstance(x, str):
+                has_text = True
+                text_prompt += x # concat all strings so it can be interleave vl
+            else:
+                has_image = True
+                text_prompt = text_prompt.replace(
+                    "<image>",
+                    "<|vision_start|>" + "<|image_pad|>" * 256 + "<|vision_end|>"
+                )
+                resized_images = x.resize((448, 448))
+                image_inputs = processor.image_processor(resized_images, return_tensors="pt")
+                image_prompt.append(image_inputs.pixel_values)
+                image_grid_thw.append(image_inputs.image_grid_thw)
+        if len(image_prompt) == 0:
+            image_prompt = None
+            image_grid_thw = None
+        else:
+            image_prompt = torch.cat(image_prompt, dim=0)
+            image_grid_thw = torch.cat(image_grid_thw, dim=0)
+        
+
+        return text_prompt, image_prompt, image_grid_thw
+
+
 
 
     @torch.no_grad()
@@ -90,11 +135,12 @@ class blip3oQwenForInferenceLM(Qwen2_5_VLForConditionalGeneration, blip3oMetaFor
             return_dict=True,
         )
         hidden_states = outputs.hidden_states[-1][:,-N_QUERY:,:]
-        img_hidden_states = hidden_states 
+        img_hidden_states = hidden_states # [bsz, 64, 3584] N_QUERY==64
         output_img = self.sample_images(img_hidden_states, scheduler)
-        output_img = output_img.view(1, 1792, -1).permute(0,2,1).contiguous()
+        # print("output_img shape (latent)", output_img.size())
+        output_img = output_img.view(1, 1792, -1).permute(0,2,1).contiguous() # [bsz, 64, 1792]
 
-        return output_img
+        return output_img #, img_hidden_states.detach()
 
     def sample_images(
         self,
@@ -175,6 +221,7 @@ class blip3oQwenForInferenceLM(Qwen2_5_VLForConditionalGeneration, blip3oMetaFor
         samples = numpy_to_pil(samples)
         return samples
 
+    # ! this function is not usable, many things seem not exist or outdated
     def prepare_and_encode_inputs(
         self,
         inputs: List[str | Image.Image],

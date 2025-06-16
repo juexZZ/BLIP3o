@@ -344,7 +344,7 @@ def create_model(
             logging.info(f"Loaded {model_name} model config.")
         else:
             logging.error(f"Model config for {model_name} not found; available models {list_models()}.")
-            raise RuntimeError(f"Model config for {model_name} not found.")
+            raise RuntimeError(f"Model config for {model_name} not found; available models {list_models()}")
 
         if "rope" in model_cfg.get("vision_cfg", {}):
             if model_cfg["vision_cfg"]["rope"]:

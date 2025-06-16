@@ -27,6 +27,19 @@ import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoProcessor
 
+# ! SPACE logging with mlflow
+import mlflow
+import space_mlflow
+# Setup Space mlflow
+region = "n7" # This value should be changed according to target region name.
+mlflow.set_tracking_uri(f"https://mlp.{region}.sr-cloud.com/api/mlflow")
+ 
+api_key = eval(os.environ['SPACE_ENV_VARS'])['SPACE_API_KEY']
+space_mlflow.set_api_key(api_key)
+group_id = space_mlflow.get_space_groups()[0] # Specify group id from SPACE. In this example first group fetched from SPACE is selected.
+space_mlflow.select_space_group(group_id)
+# ! ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 transform_und_images = T.Compose([T.Resize(448, interpolation=InterpolationMode.BICUBIC, antialias=True), T.CenterCrop(448)])
 
@@ -77,7 +90,6 @@ class DataArguments:
     lazy_preprocess: bool = False
     is_multimodal: bool = False
     image_folder: Optional[str] = field(default=None)
-    journeyDB_folder: Optional[str] = field(default=None)
     shortcaption_image_folder: Optional[str] = field(default=None)
     data_type: Optional[str] = field(default="mix")
     image_aspect_ratio: str = "square"
@@ -569,17 +581,15 @@ class LazySupervisedMixDataset(Dataset):
         list_data_dict = []
 
 
-        # load journeyDB_T2I data with json file 
+        # load journeyDB_T2I data
         # train_dataset = load_dataset("json", data_files='/fsx/sfr/data/jiuhai/hub/datasets--JourneyDB--JourneyDB/snapshots/e191aa61ca37e5e4418707ade4df5deb5c6d5d8f/data/train/train_caption_only.jsonl', split="train", num_proc=64)
-        # if args.journeyDB_folder is not None:
-        #     train_dataset = load_dataset("json", data_files=os.path.join(args.journeyDB_folder, "data/train/train_caption_only.jsonl"), split="train", num_proc=64)
-        #     train_dataset = train_dataset.add_column('type', len(train_dataset) * ['journeyDB_T2I'])
-        #     train_dataset = train_dataset.add_column('image', len(train_dataset) * [None])
-        #     train_dataset = train_dataset.rename_column("caption", "txt")
-        #     train_dataset = train_dataset.rename_column("img_path", "image_path")
-        #     train_dataset = train_dataset.remove_columns([col for col in train_dataset.column_names if not col in (
-        #         ["txt", "image", "type", "image_path"])])
-        #     print(f"finish loading journeyDB {len(train_dataset)}")
+        # train_dataset = train_dataset.add_column('type', len(train_dataset) * ['journeyDB_T2I'])
+        # train_dataset = train_dataset.add_column('image', len(train_dataset) * [None])
+        # train_dataset = train_dataset.rename_column("caption", "txt")
+        # train_dataset = train_dataset.rename_column("img_path", "image_path")
+        # train_dataset = train_dataset.remove_columns([col for col in train_dataset.column_names if not col in (
+        #     ["txt", "image", "type", "image_path"])])
+        # print(f"finish loading journeyDB {len(train_dataset)}")
         
 
 
@@ -694,8 +704,7 @@ class LazySupervisedMixDataset(Dataset):
                             img = img.convert("RGB")
                         elif sources["type"] == "journeyDB_T2I" or sources["type"] == "journeyDB_I2I":
                             if sources["type"] == "journeyDB_T2I" or sources["type"] == "journeyDB_I2I":
-                                image_path = os.path.join(args.journeyDB_folder, "data", "train", "imgs", img)
-                                # image_path = os.path.join('/fsx/sfr/data/jiuhai/hub/datasets--JourneyDB--JourneyDB/snapshots/e191aa61ca37e5e4418707ade4df5deb5c6d5d8f/data/train/imgs', img)
+                                image_path = os.path.join('/fsx/sfr/data/jiuhai/hub/datasets--JourneyDB--JourneyDB/snapshots/e191aa61ca37e5e4418707ade4df5deb5c6d5d8f/data/train/imgs', img)
                             else:
                                 raise ValueError("Unknown source type. Please check the 'type' in 'sources'.")
                             img = Image.open(image_path).convert("RGB")
@@ -887,8 +896,7 @@ def train(attn_implementation=None):
                 ),
             )
         )
-        
-    ## if there exists vision tower for image understanind, we will load LLaMA LLM, otherwise will load Qwen-VL
+
     if model_args.vision_tower is not None:
         model = blip3oLlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
@@ -898,14 +906,22 @@ def train(attn_implementation=None):
             **bnb_model_from_pretrained_args,
         )
     else:
-        model = blip3oQwenForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            attn_implementation=attn_implementation,
-            torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
-            **bnb_model_from_pretrained_args,
-        )
-
+        if "Qwen" in model_args.model_name_or_path or "qwen" in model_args.model_name_or_path :
+            model = blip3oQwenForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                **bnb_model_from_pretrained_args,
+            )
+        else:
+            model = transformers.LlamaForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                **bnb_model_from_pretrained_args,
+            )
     model.config.use_cache = False
 
     if model_args.freeze_backbone:
@@ -925,14 +941,17 @@ def train(attn_implementation=None):
                 output.requires_grad_(True)
 
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-    
-    try:
+    if "Qwen" in model_args.model_name_or_path or "qwen" in model_args.model_name_or_path:
         tokenizer = AutoProcessor.from_pretrained(model_args.model_name_or_path).tokenizer
-    except Exception as e:
-        tokenizer = AutoProcessor.from_pretrained(model_args.model_name_or_path)
-        
-    tokenizer.model_max_length = training_args.model_max_length
-
+        tokenizer.model_max_length = training_args.model_max_length
+    else:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            model_args.model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            model_max_length=training_args.model_max_length,
+            padding_side="right",
+            use_fast=False,
+        )
     # tokenizer.pad_token = tokenizer.unk_token
     if tokenizer.pad_token is None:
         smart_tokenizer_and_embedding_resize(

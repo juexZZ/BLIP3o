@@ -565,7 +565,15 @@ class EVAVisionTransformer(nn.Module):
 
     def forward(self, x, return_all_features=False):
         if return_all_features:
-            return self.forward_features(x, return_all_features)
+            # return self.forward_features(x, return_all_features)
+            x = self.forward_features(x, return_all_features)
+            #! very hacky !
+            #! project everything to the output dim (1024)
+            #! make it equivalent to mean pooling
+            # x = self.norm(x[:, 1:].mean(1)) # remove cls
+            # return self.head(x)
+            # return x
+            return self.head(self.norm(x))
         x = self.forward_features(x)
         x = self.head(x)
         return x
